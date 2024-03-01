@@ -11,6 +11,7 @@ class Contractor {
     public int $id;
     public int $type;
     public string $name;
+    public bool $mobile = false;
 
     public function __construct(int $resellerId) {
         $this->id = $resellerId;
@@ -61,15 +62,11 @@ class Status {
 
 abstract class ReferencesOperation {
     /**
-     * @return array{
-     * notificationEmployeeByEmail:bool,
-     * notificationClientByEmail:bool,
-     * notificationClientBySms: array{isSent:bool, error: string}
-     * }
+     * @return array<string, SendingResult>
      */
     abstract public function doOperation(): array;
 
-    public function getRequest($pName): mixed {
+    public function getRequest(string|int $pName): mixed {
         return $_REQUEST[$pName] ?? null;
     }
 }
@@ -78,6 +75,11 @@ function getResellerEmailFrom(): string {
     return 'contractor@example.com';
 }
 
+/**
+ * @param int $resellerId
+ * @param string $event
+ * @return string[]
+ */
 function getEmailsByPermit(int $resellerId, string $event): array {
     // fakes the method
     return ['someemeil@example.com', 'someemeil2@example.com'];
@@ -193,5 +195,79 @@ class Validation {
                 break;
         }
         throw new Exception("Value is not type '{$type}'");
+    }
+}
+
+class Error {
+    protected string|int $code;
+    protected string $message;
+    protected mixed $customData;
+    
+    public function __construct(string $message, int $code = 0, mixed $customData = null) {
+        $this->message = $message;
+        $this->code = $code;
+        $this->customData = $customData;
+    }
+}
+
+class Result {
+    protected mixed $data = null;
+    protected bool $isSuccess = true;
+    /**
+     * @var Error[]
+     */
+    protected array $errors = [];
+    
+    public function isSuccess(): bool {
+        return $this->isSuccess;
+    }
+    
+    public function addError(Error $error): static {
+        $this->isSuccess = false;
+        $this->errors[] = $error;
+        return $this;
+    }
+    
+    /**
+     * @return Error[]
+     */
+    public function getErrors(): array {
+        return $this->errors;
+    }
+    
+    /**
+     * @param array<mixed> $data
+     */
+    public function setData(array $data): static {
+        $this->data = $data;
+        return $this;
+    }
+    
+    /**
+     * @return array<mixed>
+     */
+    public function getData(): array {
+        return $this->data;
+    }
+}
+
+class SendingResult extends Result {
+    protected const RESULT_KEY = 'resultSending';
+    protected bool $isSenderSuccess = false;
+    
+    public function setResult(bool $result): static {
+        $this->isSenderSuccess = $result;
+        return parent::setData([static::RESULT_KEY => $result]);
+    }
+    
+    /**
+     * @return mixed|null
+     */
+    public function getResult(): mixed {
+        return parent::getData()[static::RESULT_KEY] ?? null;
+    }
+    
+    public function isSender(): bool {
+        return $this->isSuccess() && $this->isSenderSuccess;
     }
 }

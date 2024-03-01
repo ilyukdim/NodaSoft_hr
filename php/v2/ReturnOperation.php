@@ -7,24 +7,143 @@ use Exception;
 class TsReturnOperation extends ReferencesOperation {
     public const TYPE_NEW = 1;
     public const TYPE_CHANGE = 2;
-
-    public const EMAILS_TYPE_PERMITTED = 'tsGoodsReturn';
+    public const EMAILS_TYPE_EMPLOYEE = 'tsGoodsReturn';
+    
+    private int $resellerId;
+    private Contractor $client;
+    
+    /**
+     * @var array<mixed>
+     */
+    private array $templateMessageData;
+    private int $notificationType;
+    private int $differencesTo;
+    private string $emailFrom;
+    
+    /**
+     * @var string[]
+     */
+    protected array $emailEmployees;
+    
+    /**
+     * @return array<string, SendingResult>
+     * @throws Exception
+     */
+    public function doOperation(): array {
+        $this->makeData();
+        $resultSendEmailEmploy = $this->sendEmailToEmploy();
+        
+        if ($this->isSendToClient()) {
+            $resultSendEmailClient = $this->sendEmailToClient();
+            $resultSendMobileClient = $this->sendMobileToClient();
+        }
+        
+        return [
+            'notificationEmployeeByEmailResult' => $resultSendEmailEmploy,
+            'notificationClientByEmailResult' => $resultSendEmailClient ?? new SendingResult(),
+            'notificationClientBySmsResult' => $resultSendMobileClient ?? new SendingResult(),
+        ];
+    }
+    
+    private function isSendToClient(): bool {
+        return $this->notificationType === self::TYPE_CHANGE && !empty($this->differencesTo);
+    }
+    private function sendEmailToClient(): SendingResult {
+        $result = new SendingResult();
+        try {
+            if (empty($this->emailFrom)) {
+                throw new Exception('Empty email from');
+            }
+            if (empty($this->client->email)) {
+                throw new Exception('Empty client email');
+            }
+            $messageEmail = [
+                'emailFrom' => $this->emailFrom,
+                'emailTo' => $this->client->email,
+                'subject' => __('complaintClientEmailSubject', $this->templateMessageData),
+                'message' => __('complaintClientEmailBody', $this->templateMessageData),
+            ];
+            
+            MessagesClient::sendMessage(
+                [MessageTypes::EMAIL => $messageEmail],
+                $this->resellerId,
+                $this->client->id, // здесь лишний параметр или в предыдущем вызове его не хватает
+                NotificationEvents::CHANGE_RETURN_STATUS,
+                $this->differencesTo
+            );
+            $result->setResult(true);
+        } catch (\Throwable   $th) {
+            $result->addError(new Error($th->getMessage()));
+        }
+        return $result;
+    }
+    
+    private function sendMobileToClient(): SendingResult {
+        $result = new SendingResult();
+        try {
+            if (!empty($this->client->mobile)) {
+                throw new Exception('Client not mobile');
+            }
+            $error = null;
+            NotificationManager::send(
+                $this->resellerId,
+                $this->client->id,
+                NotificationEvents::CHANGE_RETURN_STATUS,
+                $this->differencesTo,
+                $this->templateMessageData,
+                $error
+            );
+            
+            if (!empty($error)) {
+                throw new Exception($error);
+            }
+            $result->setResult(true);
+        } catch (\Throwable $th) {
+            $result->addError(new Error($th->getMessage(), $th->getCode()));
+        }
+        return $result;
+    }
+    
+    private function sendEmailToEmploy(): SendingResult {
+        $result = new SendingResult();
+        try {
+            if (empty($this->emailFrom)) {
+                throw new Exception('Empty email from');
+            }
+            if (empty($this->emailEmployees)) {
+                throw new Exception('Empty employs email');
+            }
+            
+            $messageEmail = [
+                'emailFrom' => $this->emailFrom,
+                'subject' => __('complaintEmployeeEmailSubject', $this->templateMessageData),
+                'message' => __('complaintEmployeeEmailBody', $this->templateMessageData),
+            ];
+            foreach ($this->emailEmployees as $email) {
+                $messageEmail['emailTo'] = $email;
+                MessagesClient::sendMessage(
+                    [MessageTypes::EMAIL => $messageEmail],
+                    $this->resellerId,
+                    $this->client->id, // здесь не хватает параметра или в следующем вызове он лишний
+                    NotificationEvents::CHANGE_RETURN_STATUS
+                );
+            }
+            $result->setResult(true);
+        } catch (\Throwable $th) {
+            $result->addError(new Error($th->getMessage(), $th->getCode()));
+        }
+        return $result;
+    }
     
     /**
      * @throws Exception
      */
-    public function doOperation(): array {
-        $notificationEmployeeByEmail = false;
-        $notificationClientByEmail = false;
-        $notificationClientBySmsIsSent = false;
-        $sendMobileErrMessage = '';
-        
+    private function makeData(): void {
         $data = $this->getDataFromRequest();
         $resellerId = $data['resellerId'];
         $creatorId = $data['creatorId'];
         $clientId = $data['clientId'];
         $expertId = $data['expertId'];
-        $notificationType = $data['notificationType'];
         
         $client = Contractor::getById($clientId);
         if (is_null($client)) {
@@ -34,7 +153,7 @@ class TsReturnOperation extends ReferencesOperation {
             throw new Exception('Client no valid type!', 400);
         }
         $seller = Seller::getById($clientId);
-        if(!is_null($seller)){
+        if (!is_null($seller)) {
             throw new Exception('The client is a seller!', 400);
         }
         $cr = Employee::getById($creatorId);
@@ -46,78 +165,18 @@ class TsReturnOperation extends ReferencesOperation {
             throw new Exception('Expert not found!', 400);
         }
         
+        $data['clientName'] = $client->getFullName();
         $data['creatorName'] = $cr->getFullName();
         $data['expertName'] = $et->getFullName();
-        $templateData = $this->getTemplate($data);
-    
-        $emailFrom = getResellerEmailFrom();
-        $emails = getEmailsByPermit($resellerId, self::EMAILS_TYPE_PERMITTED);
         
-        if (!empty($emailFrom) && count($emails) > 0) {
-            $messageEmail = [
-                'emailFrom' => $emailFrom,
-                'subject' => __('complaintEmployeeEmailSubject', $templateData),
-                'message' => __('complaintEmployeeEmailBody', $templateData),
-            ];
-            foreach ($emails as $email) {
-                $messageEmail['emailTo'] = $email;
-                MessagesClient::sendMessage(
-                    [MessageTypes::EMAIL => $messageEmail],
-                    $resellerId,
-                    $client->id, // здесь не хватает параметра или в следующем вызове он лишний
-                    NotificationEvents::CHANGE_RETURN_STATUS
-                );
-            }
-            $notificationEmployeeByEmail = true;
-        }
-
-        /** Шлём клиентское уведомление, только если произошла смена статуса */
-        if ($notificationType === self::TYPE_CHANGE && !empty($data['differences']['to'])) {
-            if (!empty($emailFrom) && !empty($client->email)) {
-                $messageEmail = [
-                    'emailFrom' => $emailFrom,
-                    'emailTo' => $client->email,
-                    'subject' => __('complaintClientEmailSubject', $templateData),
-                    'message' => __('complaintClientEmailBody', $templateData),
-                ];
-                
-                MessagesClient::sendMessage(
-                    [MessageTypes::EMAIL => $messageEmail],
-                    $resellerId,
-                    $client->id, // здесь лишний параметр или в предыдущем вызове его не хватает
-                    NotificationEvents::CHANGE_RETURN_STATUS,
-                    $data['differences']['to']
-                );
-                $notificationClientByEmail = true;
-            }
-
-            if (!empty($client->mobile)) {
-                $error = null;
-                $notificationClientBySmsIsSent = NotificationManager::send(
-                    $resellerId,
-                    $client->id,
-                    NotificationEvents::CHANGE_RETURN_STATUS,
-                    $data['differences']['to'],
-                    $templateData,
-                    $error
-                );
-                
-                if (!empty($error)) {
-                    $sendMobileErrMessage = $error;
-                }
-            }
-        }
-        
-        return [
-            'notificationEmployeeByEmail' => $notificationEmployeeByEmail,
-            'notificationClientByEmail' => $notificationClientByEmail,
-            'notificationClientBySms' => [
-                'isSent' => $notificationClientBySmsIsSent,
-                'error' => $sendMobileErrMessage,
-            ],
-        ];
+        $this->templateMessageData = $this->getTemplate($data);
+        $this->emailFrom = getResellerEmailFrom();
+        $this->emailEmployees = getEmailsByPermit($resellerId, self::EMAILS_TYPE_EMPLOYEE);
+        $this->resellerId = $resellerId;
+        $this->client = $client;
+        $this->notificationType = $data['notificationType'];
+        $this->differencesTo = $data['differences']['to'] ?? 0;
     }
-    
     
     /**
      * @return array<mixed> $data
@@ -174,24 +233,21 @@ class TsReturnOperation extends ReferencesOperation {
             }
         }
         if ($emptyKeys) {
-            throw new Exception(sprintf('Empty template data: %s', implode(', ', $emptyKeys)), 500);
+            throw new Exception(sprintf('Empty template data: %s', implode(', ', $emptyKeys)), 400);
         }
         return $templateData;
     }
     
     /**
-     * @return array<string, array{req: ?bool,type: ?string, match: ?string}>
+     * @return array<string, array{req: ?bool, type: ?string, match: ?string}>
      */
     private function getFieldsRules(): array {
         return [
             'complaintId' => ['req' => true, 'type' => 'int'],
             'complaintNumber' => ['req' => true, 'type' => 'string', 'match' => '^[\w\d_-$]+$'],
             'creatorId' => ['req' => true, 'type' => 'int'],
-            'creatorName' => ['req' => true, 'type' => 'string'],
             'expertId' => ['req' => true, 'type' => 'int'],
-            'expertName' => ['req' => true, 'type' => 'string'],
             'clientId' => ['req' => true, 'type' => 'int'],
-            'clientName' => ['req' => true, 'type' => 'string'],
             'consumptionId' => ['req' => true, 'type' => 'int'],
             'consumptionNumber' => ['req' => true, 'type' => 'string', 'match' => '^[\w\d_-$]+$'],
             'agreementNumber' => ['req' => true, 'type' => 'string', 'match' => '^[\w\d_-$]+$'],
