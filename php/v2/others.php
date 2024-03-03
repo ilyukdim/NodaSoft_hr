@@ -271,3 +271,85 @@ class SendingResult extends Result {
         return $this->isSuccess() && $this->isSenderSuccess;
     }
 }
+
+
+interface EmailServiceInterface
+{
+    public function sendMessage(
+        array $message,
+        int $resellerId,
+        int $clientId,
+        int $notificationType,
+        int $differencesTo = 0
+    ): void;
+
+}
+
+interface SmsServiceInterface
+{
+    public function send(
+        int $resellerId,
+        int $clientId,
+        int $notificationType,
+        int $differencesTo,
+        array $templateMessageData,
+        string &$error
+    ): void;
+}
+
+class SmsService implements SmsServiceInterface
+{
+    /**
+     * @param int    $resellerId
+     * @param int    $clientId
+     * @param int    $notificationType
+     * @param int    $differencesTo
+     * @param array  $templateMessageData
+     * @param string $error
+     * @return void
+     */
+    public function send(
+        int $resellerId,
+        int $clientId,
+        int $notificationType,
+        int $differencesTo,
+        array $templateMessageData,
+        string &$error
+    ): void {
+        NotificationManager::send(
+            $this->resellerId,
+            $this->client->id,
+            $this->notificationType,
+            $this->differencesTo,
+            $this->templateMessageData,
+            $error
+        );
+    }
+}
+
+
+class EmailService implements EmailServiceInterface
+{
+    /**
+     * @param array $message
+     * @param int   $resellerId
+     * @param int   $clientId
+     * @param int   $notificationType
+     * @param int   $differencesTo
+     * @return void
+     */
+    public function sendMessage(
+        array $message,
+        int $resellerId,
+        int $clientId,
+        int $notificationType,
+        int $differencesTo = 0
+    ): void {
+        MessagesClient::sendMessage(
+            [MessageTypes::EMAIL => $message],
+            $this->resellerId,
+            $this->client->id,
+            $this->notificationType,
+        );
+    }
+}

@@ -25,6 +25,12 @@ class TsReturnOperation extends ReferencesOperation {
      */
     protected array $emailEmployees;
     
+    public function __construct(
+        protected EmailServiceInterface $emailService,
+        protected SmsServiceInterface $smsService)
+    {
+    }
+    
     /**
      * @return array<string, SendingResult>
      * @throws Exception
@@ -64,8 +70,8 @@ class TsReturnOperation extends ReferencesOperation {
                 'message' => __('complaintClientEmailBody', $this->templateMessageData),
             ];
             
-            MessagesClient::sendMessage(
-                [MessageTypes::EMAIL => $messageEmail],
+            $this->emailService->sendMessage(
+                $messageEmail,
                 $this->resellerId,
                 $this->client->id, // здесь лишний параметр или в предыдущем вызове его не хватает
                 NotificationEvents::CHANGE_RETURN_STATUS,
@@ -85,7 +91,8 @@ class TsReturnOperation extends ReferencesOperation {
                 throw new Exception('Client not mobile');
             }
             $error = null;
-            NotificationManager::send(
+            
+            $this->smsService->send(
                 $this->resellerId,
                 $this->client->id,
                 NotificationEvents::CHANGE_RETURN_STATUS,
@@ -121,8 +128,8 @@ class TsReturnOperation extends ReferencesOperation {
             ];
             foreach ($this->emailEmployees as $email) {
                 $messageEmail['emailTo'] = $email;
-                MessagesClient::sendMessage(
-                    [MessageTypes::EMAIL => $messageEmail],
+                $this->emailService->sendMessage(
+                    $messageEmail,
                     $this->resellerId,
                     $this->client->id, // здесь не хватает параметра или в следующем вызове он лишний
                     NotificationEvents::CHANGE_RETURN_STATUS
@@ -233,7 +240,7 @@ class TsReturnOperation extends ReferencesOperation {
             }
         }
         if ($emptyKeys) {
-            throw new Exception(sprintf('Empty template data: %s', implode(', ', $emptyKeys)), 400);
+            throw new Exception(sprintf('Empty template data: %s', implode(', ', $emptyKeys)));
         }
         return $templateData;
     }
